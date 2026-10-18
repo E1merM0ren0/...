@@ -1,0 +1,51 @@
+
+name: Build llama.cpp with Vulkan Support
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+# Write shared settings only once.
+env:
+  # Original fork — keep this commented for now.
+  # LLAMA_REPOSITORY: thecodacus/llama.cpp
+
+  # Test upstream instead.
+  LLAMA_REPOSITORY: ggml-org/llama.cpp
+  LLAMA_REF: master
+
+  CMAKE_BUILD_TYPE: Release
+  GGML_VULKAN: ON
+  ARTIFACT_RETENTION_DAYS: 7
+
+jobs:
+  build-windows:
+    runs-on: windows-latest
+    steps:
+      - name: Checkout llama.cpp
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ env.LLAMA_REPOSITORY }}
+          ref: ${{ env.LLAMA_REF }}
+          path: llama.cpp
+          submodules: recursive
+
+      # Keep the Windows-specific Vulkan SDK installation here.
+      # Configure, build, and upload the Windows binaries here.
+
+  build-linux:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout llama.cpp
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ env.LLAMA_REPOSITORY }}
+          ref: ${{ env.LLAMA_REF }}
+          path: llama.cpp
+          submodules: recursive
+
+      # Keep the Linux-specific Vulkan dependencies here.
+      # Configure, build, and upload the Linux binaries here.
