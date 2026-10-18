@@ -1,4 +1,4 @@
-```yaml
+
 name: Build llama.cpp with Vulkan Support
 
 on:
@@ -162,4 +162,4 @@ jobs:
             llama.cpp/build/lib/*
           if-no-files-found: error
           retention-days: 7
-```
+
