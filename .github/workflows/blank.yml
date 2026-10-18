@@ -1,51 +1,165 @@
-
+```yaml
 name: Build llama.cpp with Vulkan Support
 
 on:
   workflow_dispatch:
   push:
-    branches: [ main ]
+    branches: [main]
   pull_request:
-    branches: [ main ]
-
-# Write shared settings only once.
-env:
-  # Original fork — keep this commented for now.
-  # LLAMA_REPOSITORY: thecodacus/llama.cpp
-
-  # Test upstream instead.
-  LLAMA_REPOSITORY: ggml-org/llama.cpp
-  LLAMA_REF: master
-
-  CMAKE_BUILD_TYPE: Release
-  GGML_VULKAN: ON
-  ARTIFACT_RETENTION_DAYS: 7
+    branches: [main]
 
 jobs:
-  build-windows:
-    runs-on: windows-latest
+  build:
+    name: Build on ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+
+    strategy:
+      fail-fast: false
+      matrix:
+        os:
+          - windows-latest
+          - ubuntu-24.04
+
     steps:
+      # Shared checkout: change the active repository line to switch sources.
       - name: Checkout llama.cpp
         uses: actions/checkout@v4
         with:
-          repository: ${{ env.LLAMA_REPOSITORY }}
-          ref: ${{ env.LLAMA_REF }}
+          # repository: thecodacus/llama.cpp
+          repository: ggml-org/llama.cpp
+          ref: master
           path: llama.cpp
           submodules: recursive
 
-      # Keep the Windows-specific Vulkan SDK installation here.
-      # Configure, build, and upload the Windows binaries here.
+      # -------------------- WINDOWS SETUP --------------------
 
-  build-linux:
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout llama.cpp
-        uses: actions/checkout@v4
+      - name: Install Vulkan SDK (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        timeout-minutes: 20
+        run: |
+          $ErrorActionPreference = "Stop"
+
+          $ver = "1.4.313.2"
+          $installerPath = "$env:RUNNER_TEMP\VulkanSDK-Installer.exe"
+          $url = "https://sdk.lunarg.com/sdk/download/$ver/windows/vulkan-sdk.exe"
+
+          Write-Host "Downloading Vulkan SDK $ver..."
+          curl.exe -fL --retry 3 --retry-delay 5 -o $installerPath $url
+
+          if ($LASTEXITCODE -ne 0) {
+            throw "Vulkan SDK download failed with exit code $LASTEXITCODE"
+          }
+
+          Write-Host "Installing Vulkan SDK $ver..."
+          & $installerPath --accept-licenses --default-answer --confirm-command install
+
+          if ($LASTEXITCODE -ne 0) {
+            throw "Vulkan SDK installer failed with exit code $LASTEXITCODE"
+          }
+
+          $sdkPath = "C:\VulkanSDK\$ver"
+
+          if (-not (Test-Path "$sdkPath\Bin\glslc.exe")) {
+            throw "glslc.exe was not found at $sdkPath\Bin\glslc.exe"
+          }
+
+          "VULKAN_SDK=$sdkPath" | Out-File -FilePath $env:GITHUB_ENV -Append
+          "$sdkPath\Bin" | Out-File -FilePath $env:GITHUB_PATH -Append
+
+          Write-Host "Vulkan SDK installed at $sdkPath"
+
+      # -------------------- LINUX SETUP --------------------
+
+      - name: Install Vulkan dependencies (Linux)
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          sudo apt-get update
+          sudo apt-get install -y \
+            build-essential \
+            cmake \
+            ninja-build \
+            git \
+            libvulkan-dev \
+            vulkan-tools \
+            vulkan-validationlayers \
+            spirv-tools \
+            spirv-headers \
+            glslc
+
+      - name: Locate SPIRV-Headers (Linux)
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          CONFIG="$(dpkg -L spirv-headers \
+            | grep -m1 '/SPIRV-HeadersConfig.cmake$' || true)"
+
+          if [ -z "$CONFIG" ]; then
+            echo "::error::SPIRV-HeadersConfig.cmake was not found."
+            dpkg -L spirv-headers
+            exit 1
+          fi
+
+          echo "SPIRV_HEADERS_DIR=$(dirname "$CONFIG")" >> "$GITHUB_ENV"
+          echo "Found SPIRV-Headers configuration: $CONFIG"
+
+      # -------------------- CONFIGURATION --------------------
+
+      - name: Configure CMake (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          cmake -S llama.cpp -B llama.cpp/build `
+            -DGGML_VULKAN=ON `
+            -DCMAKE_BUILD_TYPE=Release
+
+          if ($LASTEXITCODE -ne 0) {
+            throw "CMake configuration failed."
+          }
+
+      - name: Configure CMake (Linux)
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          cmake -S llama.cpp -B llama.cpp/build -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DGGML_VULKAN=ON \
+            -DSPIRV-Headers_DIR="$SPIRV_HEADERS_DIR"
+
+      # -------------------- SHARED BUILD --------------------
+
+      - name: Build llama.cpp
+        run: cmake --build llama.cpp/build --config Release --parallel 4
+
+      # -------------------- ARTIFACTS --------------------
+
+      - name: Upload Windows artifacts
+        if: runner.os == 'Windows'
+        uses: actions/upload-artifact@v4
         with:
-          repository: ${{ env.LLAMA_REPOSITORY }}
-          ref: ${{ env.LLAMA_REF }}
-          path: llama.cpp
-          submodules: recursive
+          name: llama-cpp-windows-vulkan
+          path: |
+            llama.cpp/build/bin/Release/*.exe
+            llama.cpp/build/bin/Release/*.dll
+          if-no-files-found: error
+          retention-days: 7
 
-      # Keep the Linux-specific Vulkan dependencies here.
-      # Configure, build, and upload the Linux binaries here.
+      - name: Upload Linux artifacts
+        if: runner.os == 'Linux'
+        uses: actions/upload-artifact@v4
+        with:
+          name: llama-cpp-linux-vulkan
+          path: |
+            llama.cpp/build/bin/*
+            llama.cpp/build/lib/*
+          if-no-files-found: error
+          retention-days: 7
+```
